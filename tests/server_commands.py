@@ -1,23 +1,31 @@
 import brukva
 import unittest
+import sys
+from datetime import datetime, timedelta
 from tornado.ioloop import IOLoop
 
 
 class CustomAssertionError(AssertionError):
     io_loop = None
 
-    def __init__(self, msg):
-        super(CustomAssertionError, self).__init__(msg)
+    def __init__(self, *args, **kwargs):
+        super(CustomAssertionError, self).__init__(*args, **kwargs)
         CustomAssertionError.io_loop.stop()
 
 
-class TestIOLoop(unittest.TestCase):
+class TestIOLoop(IOLoop):
+    def handle_callback_exception(self, callback):
+        (type, value, traceback) = sys.exc_info()
+        raise type, value, traceback
+
+
+class TornadoTestCase(unittest.TestCase):
     def __init__(self, *args, **kwargs):
-        super(TestIOLoop, self).__init__(*args, **kwargs)
+        super(TornadoTestCase, self).__init__(*args, **kwargs)
         self.failureException = CustomAssertionError
 
     def setUp(self):
-        self.loop = IOLoop()
+        self.loop = TestIOLoop()
         CustomAssertionError.io_loop = self.loop
         self.client = brukva.Client(io_loop=self.loop)
         self.client.connection.connect()
@@ -45,7 +53,7 @@ class TestIOLoop(unittest.TestCase):
         self.loop.start()
 
 
-class ServerCommandsTestCase(TestIOLoop):
+class ServerCommandsTestCase(TornadoTestCase):
     def test_set(self):
         self.client.set('foo', 'bar', [self.expect(True), self.finish])
         self.start()
@@ -55,10 +63,27 @@ class ServerCommandsTestCase(TestIOLoop):
         self.client.get('foo', [self.expect('bar'), self.finish])
         self.start()
 
-    def test_dbinfo(self):
+    def test_substr(self):
+        self.client.set('foo', 'lorem ipsum', self.expect(True))
+        self.client.substr('foo', 2, 4, [self.expect('rem'), self.finish])
+        self.start()
+
+    def test_append(self):
+        self.client.set('foo', 'lorem ipsum', self.expect(True))
+        self.client.append('foo', ' bar', self.expect(15))
+        self.client.get('foo', [self.expect('lorem ipsum bar'), self.finish])
+        self.start()
+
+    def test_dbsize(self):
         self.client.set('a', 1, self.expect(True))
         self.client.set('b', 2, self.expect(True))
         self.client.dbsize([self.expect(2), self.finish])
+        self.start()
+
+    def test_save(self):
+        self.client.save(self.expect(True))
+        now = datetime.now().replace(microsecond=0)
+        self.client.lastsave([self.expect(lambda d: d >= now), self.finish])
         self.start()
 
     def test_keys(self):
@@ -70,6 +95,26 @@ class ServerCommandsTestCase(TestIOLoop):
         self.client.set('foo_a', 1, self.expect(True))
         self.client.set('foo_b', 2, self.expect(True))
         self.client.keys('foo_*', [self.expect(['foo_a', 'foo_b']), self.finish])
+        self.start()
+
+    def test_exists(self):
+        self.client.set('a', 1, self.expect(True))
+        self.client.exists('a', self.expect(True))
+        self.client.delete('a', self.expect(True))
+        self.client.exists('a', [self.expect(False), self.finish])
+        self.start()
+
+    def test_mset_mget(self):
+        self.client.mset({'a': 1, 'b': 2}, self.expect(True))
+        self.client.get('a', self.expect('1'))
+        self.client.get('b', self.expect('2'))
+        self.client.mget(['a', 'b'], [self.expect(['1', '2']), self.finish])
+        self.start()
+
+    def test_getset(self):
+        self.client.set('a', 1, self.expect(True))
+        self.client.getset('a', 2, self.expect('1'))
+        self.client.get('a', [self.expect('2'), self.finish])
         self.start()
 
     def test_hash(self):
@@ -109,9 +154,9 @@ class ServerCommandsTestCase(TestIOLoop):
 
     def test_sets(self):
         self.client.smembers('foo', self.expect(set()))
-        self.client.sadd('foo', 'a', self.expect(True))
-        self.client.sadd('foo', 'b', self.expect(True))
-        self.client.sadd('foo', 'c', self.expect(True))
+        self.client.sadd('foo', 'a', self.expect(1))
+        self.client.sadd('foo', 'b', self.expect(1))
+        self.client.sadd('foo', 'c', self.expect(1))
         self.client.srandmember('foo', self.expect(lambda x: x in ['a', 'b', 'c']))
         self.client.scard('foo', self.expect(3))
         self.client.srem('foo', 'a', self.expect(True))
@@ -122,12 +167,12 @@ class ServerCommandsTestCase(TestIOLoop):
         self.start()
 
     def test_sets2(self):
-        self.client.sadd('foo', 'a', self.expect(True))
-        self.client.sadd('foo', 'b', self.expect(True))
-        self.client.sadd('foo', 'c', self.expect(True))
-        self.client.sadd('bar', 'b', self.expect(True))
-        self.client.sadd('bar', 'c', self.expect(True))
-        self.client.sadd('bar', 'd', self.expect(True))
+        self.client.sadd('foo', 'a', self.expect(1))
+        self.client.sadd('foo', 'b', self.expect(1))
+        self.client.sadd('foo', 'c', self.expect(1))
+        self.client.sadd('bar', 'b', self.expect(1))
+        self.client.sadd('bar', 'c', self.expect(1))
+        self.client.sadd('bar', 'd', self.expect(1))
 
         self.client.sdiff(['foo', 'bar'], self.expect(set(['a'])))
         self.client.sdiff(['bar', 'foo'], self.expect(set(['d'])))
@@ -136,12 +181,12 @@ class ServerCommandsTestCase(TestIOLoop):
         self.start()
 
     def test_sets3(self):
-        self.client.sadd('foo', 'a', self.expect(True))
-        self.client.sadd('foo', 'b', self.expect(True))
-        self.client.sadd('foo', 'c', self.expect(True))
-        self.client.sadd('bar', 'b', self.expect(True))
-        self.client.sadd('bar', 'c', self.expect(True))
-        self.client.sadd('bar', 'd', self.expect(True))
+        self.client.sadd('foo', 'a', self.expect(1))
+        self.client.sadd('foo', 'b', self.expect(1))
+        self.client.sadd('foo', 'c', self.expect(1))
+        self.client.sadd('bar', 'b', self.expect(1))
+        self.client.sadd('bar', 'c', self.expect(1))
+        self.client.sadd('bar', 'd', self.expect(1))
 
         self.client.sdiffstore(['foo', 'bar'], 'zar', self.expect(1))
         self.client.smembers('zar', self.expect(set(['a'])))

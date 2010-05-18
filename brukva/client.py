@@ -5,6 +5,7 @@ from tornado.iostream import IOStream
 import adisp
 from functools import partial
 from collections import namedtuple
+from datetime import datetime
 from brukva.exceptions import RedisError, ConnectionError, ResponseError, InvalidResponse
 
 
@@ -61,23 +62,21 @@ class Connection(object):
 
 class Client(object):
     REPLY_MAP = dict_merge(
-        string_keys_to_dict('DEL EXISTS HDEL HEXISTS HMSET',
+        string_keys_to_dict('BGREWRITEAOF BGSAVE DEL EXISTS HDEL HEXISTS HMSET '
+                            'MSET SAVE',
                             bool),
-        string_keys_to_dict('APPEND DBSIZE HLEN',
-                            int),
         string_keys_to_dict('FLUSHALL FLUSHDB SELECT SET SHUTDOWN',
                             lambda r: r == 'OK'),
         string_keys_to_dict('SMEMBERS SINTER SUNION SDIFF',
                             set),
         string_keys_to_dict('HGETALL',
                             lambda pairs: dict(zip(pairs[::2], pairs[1::2]))),
-        string_keys_to_dict('GET SUBSTR',
-                            str),
         string_keys_to_dict('HGET',
                             lambda r: r or ''),
         string_keys_to_dict('SUBSCRIBE UNSUBSCRIBE LISTEN',
                             lambda r: Message(*r)),
         {'PING': lambda r: r == 'PONG'},
+        {'LASTSAVE': lambda t: datetime.fromtimestamp(int(t))},
         )
 
 
@@ -214,6 +213,9 @@ class Client(object):
 
 
     ### MAINTENANCE
+    def bgrewriteaof(self, callbacks=None):
+        self.execute_command('BGREWRITEAOF', callbacks)
+
     def dbsize(self, callbacks=None):
         self.execute_command('DBSIZE', callbacks)
 
@@ -232,6 +234,15 @@ class Client(object):
     def shutdown(self, callbacks=None):
         self.execute_command('SHUTDOWN', callbacks)
 
+    def save(self, callbacks=None):
+        self.execute_command('SAVE', callbacks)
+
+    def bgsave(self, callbacks=None):
+        self.execute_command('BGSAVE', callbacks)
+
+    def lastsave(self, callbacks=None):
+        self.execute_command('LASTSAVE', callbacks)
+
     def keys(self, pattern, callbacks=None):
         self.execute_command('KEYS', callbacks, pattern)
 
@@ -248,8 +259,22 @@ class Client(object):
     def set(self, key, value, callbacks=None):
         self.execute_command('SET', callbacks, key, value)
 
+    def mset(self, mapping, callbacks=None):
+        items = []
+        [ items.extend(pair) for pair in mapping.iteritems() ]
+        self.execute_command('MSET', callbacks, *items)
+
     def get(self, key, callbacks=None):
         self.execute_command('GET', callbacks, key)
+
+    def mget(self, keys, callbacks=None):
+        self.execute_command('MGET', callbacks, *keys)
+
+    def getset(self, key, value, callbacks=None):
+        self.execute_command('GETSET', callbacks, key, value)
+
+    def exists(self, key, callbacks=None):
+        self.execute_command('EXISTS', callbacks, key)
 
     ### COUNTERS COMMANDS
     def incr(self, key, callbacks=None):

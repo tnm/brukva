@@ -9,17 +9,7 @@ from brukva.exceptions import RedisError, ConnectionError, ResponseError, Invali
 
 
 Message = namedtuple('Message', 'kind channel body')
-
-
-class Task(object):
-    def __init__(self, command, callbacks, command_args, command_kwargs):
-        self.command = command
-        self.command_args = command_args
-        self.command_kwargs = command_kwargs
-        self.callbacks = callbacks
-
-    def __repr__(self):
-        return 'Task (command=%s, command_args=%s, command_kwargs=%s, %d callbacks)' % (self.command, self.command_args, self.command_kwargs, len(self.callbacks))
+Task = namedtuple('Task', 'command callbacks command_args command_kwargs')
 
 
 def string_keys_to_dict(key_string, callback):
@@ -42,8 +32,9 @@ class Connection(object):
     def connect(self):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-            sock.connect((self.host, self.port))
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
             sock.settimeout(self.timeout)
+            sock.connect((self.host, self.port))
             self._stream = IOStream(sock, io_loop=self._io_loop)
         except socket.error, e:
             raise ConnectionError(str(e))
@@ -65,7 +56,7 @@ class Connection(object):
         self._stream.read_bytes(length, callback)
 
     def readline(self, callback):
-        self._stream.read_until('\r\n', lambda data: callback(data[:-2]))
+        self._stream.read_until('\r\n', callback)
 
 
 class Client(object):
@@ -167,9 +158,6 @@ class Client(object):
                 self.propogate_result((None, tokens))
             else:
                 self._io_loop.add_callback(read_more)
-        if not length:
-            self.propogate_result((None, []))
-            return
         read_more = partial(self._process_response, [on_data])
         self._io_loop.add_callback(read_more)
 
@@ -181,36 +169,33 @@ class Client(object):
         if not data:
             self._sudden_disconnect()
             return
-        data = data[:-2]
+        data = data[:-2] # strip \r\n
         self.call_callbacks(callbacks, (None, data))
 
     def _parse_command_response(self, callbacks, data):
         if not data:
             self._sudden_disconnect()
             return
-        if data in ('$-1', '*-1'):
+        data = data[:-2] # strip \r\n
+        if data == '$-1':
             self.call_callbacks(callbacks, (None, None))
             return
+        elif data == '*0' or data == '*-1':
+            self.call_callbacks(callbacks, (None, []))
+            return
         head, tail = data[0], data[1:]
-        if head == '-':
-            if tail.startswith('ERR '):
-                tail = tail[4:]
-            self.call_callbacks(callbacks, (ResponseError(self.current_task, tail), None))
+        if head == '*':
+            self.do_multibulk(int(tail))
+        elif head == '$':
+            self.connection.read(int(tail)+2, partial(self._parse_value_response, callbacks))
         elif head == '+':
             self.call_callbacks(callbacks, (None, tail))
         elif head == ':':
             self.call_callbacks(callbacks, (None, int(tail)))
-        elif head == '$':
-            length = int(tail)
-            if length == -1:
-                self.call_callbacks(callbacks, (None, None))
-            self.connection.read(length+2, partial(self._parse_value_response, callbacks))
-        elif head == '*':
-            length = int(tail)
-            if length == -1:
-                self.call_callbacks(callbacks, (None, None))
-            else:
-                self.do_multibulk(length)
+        elif head == '-':
+            if tail.startswith('ERR '):
+                tail = tail[4:]
+            self.call_callbacks(callbacks, (ResponseError(self.current_task, tail), None))
         else:
             self.call_callbacks(callbacks, (InvalidResponse("Unknown response type for: %s" % self.current_task.command), None))
 

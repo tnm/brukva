@@ -50,6 +50,28 @@ def format(*tokens):
 def format_pipeline_request(command_stack):
     return ''.join(format(c.cmd, *c.args, **c.kwargs) for c in command_stack)
 
+def parse_info(response):
+    info = {}
+    def get_value(value):
+        if ',' not in value:
+            return value
+        sub_dict = {}
+        for item in value.split(','):
+            k, v = item.split('=')
+            try:
+                sub_dict[k] = int(v)
+            except ValueError:
+                sub_dict[k] = v
+        return sub_dict
+    for line in response.splitlines():
+        key, value = line.split(':')
+        try:
+            info[key] = int(value)
+        except ValueError:
+            info[key] = get_value(value)
+    return info
+
+
 class Connection(object):
     def __init__(self, host, port, timeout=None, io_loop=None):
         self.host = host
@@ -177,6 +199,12 @@ class Client(object):
                 string_keys_to_dict('FLUSHALL FLUSHDB SELECT SET SETEX SHUTDOWN '
                                     'RENAME RENAMENX WATCH UNWATCH',
                                     make_reply_assert_msg('OK')),
+                string_keys_to_dict('BGREWRITEAOF BGSAVE DEL EXISTS EXPIRE HDEL HEXISTS '
+                                    'HMSET MOVE MSET MSETNX SAVE SETNX',
+                                    bool),
+                string_keys_to_dict('FLUSHALL FLUSHDB SELECT SET SETEX SHUTDOWN '
+                                    'RENAME RENAMENX',
+                                    lambda r: r == 'OK'),
                 string_keys_to_dict('SMEMBERS SINTER SUNION SDIFF',
                                     reply_set),
                 string_keys_to_dict('HGETALL',
@@ -196,6 +224,11 @@ class Client(object):
                 {'TTL': reply_ttl } ,
                 {'INFO': reply_info},
                 {'MULTI_PART': make_reply_assert_msg('QUEUED')},
+                                    self.zset_score_pairs),
+                {'PING': lambda r: r == 'PONG'},
+                {'LASTSAVE': lambda t: datetime.fromtimestamp(int(t))},
+                {'TTL': lambda r: r != -1 and r or None},
+                {'INFO': parse_info},
             )
 
         self._pipeline = None

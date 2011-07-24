@@ -1,3 +1,8 @@
+note!
+-------
+
+**the latest, greatest brukva is [evilkost's fork](https://github.com/evilkost/brukva). You'll want that one.**
+
 brükva
 ========
 
